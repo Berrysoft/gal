@@ -1,3 +1,5 @@
+pub use num_bigint::BigInt;
+
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 
@@ -5,7 +7,7 @@ use std::borrow::Cow;
 pub enum RawValue {
     Unit,
     Bool(bool),
-    Num(i64),
+    Num(BigInt),
     Str(String),
 }
 
@@ -37,17 +39,17 @@ impl RawValue {
         match self {
             Self::Unit => false,
             Self::Bool(b) => *b,
-            Self::Num(i) => *i != 0,
+            Self::Num(i) => *i != 0.into(),
             Self::Str(s) => !s.is_empty(),
         }
     }
 
-    pub fn get_num(&self) -> i64 {
+    pub fn get_num(&self) -> Cow<BigInt> {
         match self {
-            Self::Unit => 0,
-            Self::Bool(b) => *b as i64,
-            Self::Num(i) => *i,
-            Self::Str(s) => s.len() as i64,
+            Self::Unit => Cow::Owned(0.into()),
+            Self::Bool(b) => Cow::Owned((*b as i32).into()),
+            Self::Num(i) => Cow::Borrowed(i),
+            Self::Str(s) => Cow::Owned(s.len().into()),
         }
     }
 
@@ -95,14 +97,14 @@ impl<'de> Deserialize<'de> for RawValue {
             where
                 E: Error,
             {
-                Ok(RawValue::Num(v))
+                Ok(RawValue::Num(v.into()))
             }
 
             fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
             where
                 E: Error,
             {
-                Ok(RawValue::Num(v as i64))
+                Ok(RawValue::Num(v.into()))
             }
 
             fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
@@ -124,7 +126,7 @@ impl Serialize for RawValue {
         match self {
             Self::Unit => serializer.serialize_unit(),
             Self::Bool(b) => serializer.serialize_bool(*b),
-            Self::Num(n) => serializer.serialize_i64(*n),
+            Self::Num(n) => n.serialize(serializer),
             Self::Str(s) => serializer.serialize_str(s),
         }
     }

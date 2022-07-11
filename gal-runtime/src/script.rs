@@ -2,6 +2,7 @@ use crate::{plugin::RuntimeRef, *};
 use gal_fallback::Fallback;
 use gal_script::*;
 use log::{error, warn};
+use num_traits::ToPrimitive;
 
 pub struct VarTable<'a> {
     pub runtime: RuntimeRef<'a>,
@@ -61,8 +62,8 @@ impl Callable for Expr {
             Self::Ref(r) => r.call(ctx),
             Self::Const(c) => c.clone(),
             Self::Unary(op, e) => match op {
-                UnaryOp::Positive => RawValue::Num(e.call(ctx).get_num()),
-                UnaryOp::Negative => RawValue::Num(-e.call(ctx).get_num()),
+                UnaryOp::Positive => RawValue::Num(e.call(ctx).get_num().into_owned()),
+                UnaryOp::Negative => RawValue::Num(-e.call(ctx).get_num().into_owned()),
                 UnaryOp::Not => match e.call(ctx) {
                     RawValue::Unit => RawValue::Unit,
                     RawValue::Bool(b) => RawValue::Bool(!b),
@@ -94,7 +95,7 @@ fn bin_val(ctx: &mut VarTable, lhs: &Expr, op: &ValBinaryOp, rhs: &Expr) -> RawV
     match t {
         ValueType::Unit => RawValue::Unit,
         ValueType::Bool => bin_bool_val(lhs.get_bool(), op, rhs.get_bool()),
-        ValueType::Num => RawValue::Num(bin_num_val(lhs.get_num(), op, rhs.get_num())),
+        ValueType::Num => RawValue::Num(bin_num_val(&lhs.get_num(), op, &rhs.get_num())),
         ValueType::Str => bin_str_val(lhs, op, rhs),
     }
 }
@@ -105,14 +106,18 @@ fn bin_bool_val(lhs: bool, op: &ValBinaryOp, rhs: bool) -> RawValue {
         | ValBinaryOp::Minus
         | ValBinaryOp::Mul
         | ValBinaryOp::Div
-        | ValBinaryOp::Mod => RawValue::Num(bin_num_val(lhs as i64, op, rhs as i64)),
+        | ValBinaryOp::Mod => RawValue::Num(bin_num_val(
+            &BigInt::from(lhs as i32),
+            op,
+            &BigInt::from(rhs as i32),
+        )),
         ValBinaryOp::And => RawValue::Bool(lhs && rhs),
         ValBinaryOp::Or => RawValue::Bool(lhs || rhs),
         ValBinaryOp::Xor => RawValue::Bool(lhs ^ rhs),
     }
 }
 
-fn bin_num_val(lhs: i64, op: &ValBinaryOp, rhs: i64) -> i64 {
+fn bin_num_val(lhs: &BigInt, op: &ValBinaryOp, rhs: &BigInt) -> BigInt {
     match op {
         ValBinaryOp::Add => lhs + rhs,
         ValBinaryOp::Minus => lhs - rhs,
@@ -134,10 +139,10 @@ fn bin_str_val(lhs: RawValue, op: &ValBinaryOp, rhs: RawValue) -> RawValue {
         ) {
             (ValueType::Str, ValueType::Str) => unimplemented!(),
             (ValueType::Num, ValueType::Str) => {
-                RawValue::Str(rhs.get_str().repeat(lhs.get_num() as usize))
+                RawValue::Str(rhs.get_str().repeat(lhs.get_num().to_usize().unwrap()))
             }
             (ValueType::Str, ValueType::Num) => {
-                RawValue::Str(lhs.get_str().repeat(rhs.get_num() as usize))
+                RawValue::Str(lhs.get_str().repeat(rhs.get_num().to_usize().unwrap()))
             }
             _ => unreachable!(),
         },

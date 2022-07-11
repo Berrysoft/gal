@@ -8,6 +8,7 @@ gal-bindings-types = { path = "../gal-bindings-types" }
 gal-fallback = { path = "../gal-fallback" }
 gal-script = { path = "../gal-script" }
 gal-locale = { path = "../gal-locale" }
+num-traits = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.8"
 rmp-serde = "1.1"

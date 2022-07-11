@@ -64,18 +64,12 @@ impl FormatArgument for ValueWrap<'_> {
         }
     }
 
-    fn fmt_lower_exp(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.0 {
-            RawValue::Num(n) => std::fmt::LowerExp::fmt(n, f),
-            _ => Err(std::fmt::Error),
-        }
+    fn fmt_lower_exp(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Err(std::fmt::Error)
     }
 
-    fn fmt_upper_exp(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self.0 {
-            RawValue::Num(n) => std::fmt::UpperExp::fmt(n, f),
-            _ => Err(std::fmt::Error),
-        }
+    fn fmt_upper_exp(&self, _f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        Err(std::fmt::Error)
     }
 }
 
