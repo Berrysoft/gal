@@ -15,7 +15,7 @@ unsafe fn string_from_ptr(p: *const u16) -> String {
 }
 
 #[derive(Default)]
-struct NativeContext {
+pub struct NativeContext {
     ident: String,
     settings: Option<Settings>,
     context: Option<Context>,
@@ -32,10 +32,18 @@ impl NativeContext {
 }
 
 type Handle = *const RwLock<NativeContext>;
+type SafeHandle<'a> = &'a RwLock<NativeContext>;
 
-pub type MainCallback = Option<extern "C" fn(Handle, *mut c_void) -> i32>;
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy)]
+pub struct CallbackData(*mut c_void);
 
-fn gal_main_impl(ident: *const u16, main: MainCallback, data: *mut c_void) -> Result<i32> {
+unsafe impl Send for CallbackData {}
+unsafe impl Sync for CallbackData {}
+
+pub type MainCallback = Option<extern "C" fn(Handle, CallbackData) -> i32>;
+
+fn gal_main_impl(ident: *const u16, main: MainCallback, data: CallbackData) -> Result<i32> {
     let ident = unsafe { string_from_ptr(ident) };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -52,7 +60,7 @@ fn gal_main_impl(ident: *const u16, main: MainCallback, data: *mut c_void) -> Re
 }
 
 #[no_mangle]
-pub extern "C" fn gal_main(ident: *const u16, main: MainCallback, data: *mut c_void) -> i32 {
+pub extern "C" fn gal_main(ident: *const u16, main: MainCallback, data: CallbackData) -> i32 {
     gal_main_impl(ident, main, data).unwrap_or(1)
 }
 
@@ -73,53 +81,28 @@ pub struct OpenGameLoadPlugin {
     pub len: usize,
 }
 
-pub type OpenGameCallback = Option<extern "C" fn(OpenGameStatus, *mut c_void, *mut c_void)>;
-
-fn emit_open_game_callback<T>(
-    status: OpenGameStatus,
-    mut status_data: Option<T>,
-    callback: OpenGameCallback,
-    data: *mut c_void,
-) {
-    if let Some(callback) = callback {
-        callback(
-            status,
-            if let Some(status_data) = status_data.as_mut() {
-                status_data as *mut T as _
-            } else {
-                null_mut()
-            },
-            data,
-        )
-    }
-}
+pub type OpenGameCallback = Option<extern "C" fn(OpenGameStatus, *const c_void, CallbackData)>;
 
 async fn gal_open_game_impl(
-    h: Handle,
-    config: *const u16,
-    callback: OpenGameCallback,
-    data: *mut c_void,
+    h: SafeHandle<'_>,
+    config: String,
+    callback: impl Fn(OpenGameStatus, *const c_void) + Send,
 ) -> Result<()> {
-    let mut h = unsafe { h.write().await };
+    let mut h = h.write().await;
     {
-        emit_open_game_callback(OpenGameStatus::LoadSettings, None, callback, data);
+        callback(OpenGameStatus::LoadSettings, null_mut());
         h.settings = Some(load_settings(&h.ident).await.unwrap_or_else(|e| {
             warn!("Load settings failed: {}", e);
             Default::default()
         }));
     }
     {
-        let config = unsafe { string_from_ptr(config) };
         let context = Context::open(&config, FrontendType::Html);
         tokio::pin!(context);
         while let Some(progress) = context.next().await {
             match progress {
-                OpenStatus::LoadProfile => {
-                    emit_open_game_callback(OpenGameStatus::LoadProfile, None, callback, data)
-                }
-                OpenStatus::CreateRuntime => {
-                    emit_open_game_callback(OpenGameStatus::CreateRuntime, None, callback, data)
-                }
+                OpenStatus::LoadProfile => callback(OpenGameStatus::LoadProfile, null_mut()),
+                OpenStatus::CreateRuntime => callback(OpenGameStatus::CreateRuntime, null_mut()),
                 OpenStatus::LoadPlugin(name, index, len) => {
                     let name = unsafe { U16CString::from_str_unchecked(&name) };
                     let status_data = OpenGameLoadPlugin {
@@ -127,17 +110,12 @@ async fn gal_open_game_impl(
                         index,
                         len,
                     };
-                    emit_open_game_callback(
-                        OpenGameStatus::LoadPlugin,
-                        Some(status_data),
-                        callback,
-                        data,
-                    )
+                    callback(OpenGameStatus::LoadPlugin, &status_data as *const _ as _)
                 }
             }
         }
         let context = context.await??;
-        emit_open_game_callback(OpenGameStatus::LoadRecords, None, callback, data);
+        callback(OpenGameStatus::LoadRecords, null_mut());
         h.records = load_records(&h.ident, &context.game.title)
             .await
             .unwrap_or_else(|e| {
@@ -145,17 +123,25 @@ async fn gal_open_game_impl(
                 Default::default()
             });
         h.context = Some(context);
-        emit_open_game_callback(OpenGameStatus::Loaded, None, callback, data);
+        callback(OpenGameStatus::Loaded, null_mut());
     }
     Ok(())
 }
 
 #[no_mangle]
-pub extern "C" fn gal_open_game(
+pub unsafe extern "C" fn gal_open_game(
     h: Handle,
     config: *const u16,
     callback: OpenGameCallback,
-    data: *mut c_void,
+    data: CallbackData,
 ) {
-    tokio::spawn(gal_open_game_impl(h, config, callback, data))
+    tokio::spawn(gal_open_game_impl(
+        h.as_ref().unwrap(),
+        string_from_ptr(config),
+        move |status, status_data| {
+            if let Some(callback) = callback {
+                callback(status, status_data, data)
+            }
+        },
+    ));
 }
