@@ -1,0 +1,6 @@
+language = "C++"
+
+pragma_once = true
+include_version = true
+
+namespace = "gal::native"

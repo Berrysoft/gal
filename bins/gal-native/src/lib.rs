@@ -1,14 +1,19 @@
 use anyhow::Result;
 use gal_runtime::*;
 use log::warn;
-use std::{ffi::c_void, ptr::null_mut};
+use std::{
+    ffi::{c_char, c_void, CStr},
+    ptr::null_mut,
+};
 use tokio::sync::RwLock;
 use tokio_stream::StreamExt;
-use widestring::{U16CStr, U16CString};
 
-unsafe fn string_from_ptr(p: *const u16) -> String {
+unsafe fn string_from_ptr(p: *const c_char) -> String {
     if !p.is_null() {
-        U16CStr::from_ptr_str(p).to_string_lossy()
+        CStr::from_ptr(p)
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default()
     } else {
         String::new()
     }
@@ -31,8 +36,12 @@ impl NativeContext {
     }
 }
 
-type Handle = *const RwLock<NativeContext>;
+type Handle = *const c_void;
 type SafeHandle<'a> = &'a RwLock<NativeContext>;
+
+unsafe fn get_safe_handle<'a>(h: Handle) -> SafeHandle<'a> {
+    (h as *const RwLock<NativeContext>).as_ref().unwrap()
+}
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +52,7 @@ unsafe impl Sync for CallbackData {}
 
 pub type MainCallback = Option<extern "C" fn(Handle, CallbackData) -> i32>;
 
-fn gal_main_impl(ident: *const u16, main: MainCallback, data: CallbackData) -> Result<i32> {
+fn main_impl(ident: *const c_char, main: MainCallback, data: CallbackData) -> Result<i32> {
     let ident = unsafe { string_from_ptr(ident) };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -51,7 +60,7 @@ fn gal_main_impl(ident: *const u16, main: MainCallback, data: CallbackData) -> R
     runtime.block_on(async move {
         if let Some(main) = main {
             let native_context = RwLock::new(NativeContext::new(ident));
-            let res = main(&native_context, data);
+            let res = main(&native_context as *const _ as _, data);
             anyhow::Ok(res)
         } else {
             anyhow::Ok(0)
@@ -60,8 +69,8 @@ fn gal_main_impl(ident: *const u16, main: MainCallback, data: CallbackData) -> R
 }
 
 #[no_mangle]
-pub extern "C" fn gal_main(ident: *const u16, main: MainCallback, data: CallbackData) -> i32 {
-    gal_main_impl(ident, main, data).unwrap_or(1)
+pub extern "C" fn main(ident: *const c_char, main: MainCallback, data: CallbackData) -> i32 {
+    main_impl(ident, main, data).unwrap_or(1)
 }
 
 #[repr(C)]
@@ -76,14 +85,15 @@ pub enum OpenGameStatus {
 
 #[repr(C)]
 pub struct OpenGameLoadPlugin {
-    pub name: *const u16,
+    pub name: *const c_char,
+    pub name_len: usize,
     pub index: usize,
     pub len: usize,
 }
 
 pub type OpenGameCallback = Option<extern "C" fn(OpenGameStatus, *const c_void, CallbackData)>;
 
-async fn gal_open_game_impl(
+async fn open_game_impl(
     h: SafeHandle<'_>,
     config: String,
     callback: impl Fn(OpenGameStatus, *const c_void) + Send,
@@ -104,9 +114,9 @@ async fn gal_open_game_impl(
                 OpenStatus::LoadProfile => callback(OpenGameStatus::LoadProfile, null_mut()),
                 OpenStatus::CreateRuntime => callback(OpenGameStatus::CreateRuntime, null_mut()),
                 OpenStatus::LoadPlugin(name, index, len) => {
-                    let name = unsafe { U16CString::from_str_unchecked(&name) };
                     let status_data = OpenGameLoadPlugin {
-                        name: name.as_ptr(),
+                        name: name.as_ptr() as _,
+                        name_len: name.len(),
                         index,
                         len,
                     };
@@ -129,14 +139,14 @@ async fn gal_open_game_impl(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn gal_open_game(
+pub unsafe extern "C" fn open_game(
     h: Handle,
-    config: *const u16,
+    config: *const c_char,
     callback: OpenGameCallback,
     data: CallbackData,
 ) {
-    tokio::spawn(gal_open_game_impl(
-        h.as_ref().unwrap(),
+    tokio::spawn(open_game_impl(
+        get_safe_handle(h),
         string_from_ptr(config),
         move |status, status_data| {
             if let Some(callback) = callback {
