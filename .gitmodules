@@ -1,0 +1,3 @@
+[submodule "bins/gal-qt/corrosion"]
+	path = bins/gal-qt/corrosion
+	url = https://github.com/corrosion-rs/corrosion

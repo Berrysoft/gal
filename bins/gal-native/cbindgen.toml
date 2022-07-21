@@ -4,3 +4,6 @@ pragma_once = true
 include_version = true
 
 namespace = "gal::native"
+
+[export]
+include = ["OpenGameLoadPlugin"]

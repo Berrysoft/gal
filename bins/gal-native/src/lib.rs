@@ -52,9 +52,10 @@ unsafe impl Sync for CallbackData {}
 
 pub type MainCallback = Option<extern "C" fn(Handle, CallbackData) -> i32>;
 
-fn main_impl(ident: *const c_char, main: MainCallback, data: CallbackData) -> Result<i32> {
+fn start_impl(ident: *const c_char, main: MainCallback, data: CallbackData) -> Result<i32> {
     let ident = unsafe { string_from_ptr(ident) };
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
         .enable_all()
         .build()?;
     runtime.block_on(async move {
@@ -69,8 +70,8 @@ fn main_impl(ident: *const c_char, main: MainCallback, data: CallbackData) -> Re
 }
 
 #[no_mangle]
-pub extern "C" fn main(ident: *const c_char, main: MainCallback, data: CallbackData) -> i32 {
-    main_impl(ident, main, data).unwrap_or(1)
+pub extern "C" fn start(ident: *const c_char, main: MainCallback, data: CallbackData) -> i32 {
+    start_impl(ident, main, data).unwrap_or(1)
 }
 
 #[repr(C)]

@@ -8,4 +8,4 @@ crate-type = ["staticlib"]
 
 [dependencies]
 gal-runtime = { path = "../../utils/gal-runtime" }
-tokio = { version = "1", features = ["macros"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
