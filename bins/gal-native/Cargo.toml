@@ -1,0 +1,12 @@
+[package]
+name = "gal-native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+gal-runtime = { path = "../../utils/gal-runtime" }
+tokio = { version = "1", features = ["macros"] }
+widestring = "1.0"

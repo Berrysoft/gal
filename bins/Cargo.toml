@@ -3,6 +3,7 @@ members = [
     "gal",
     "gal-gui/src-tauri",
     "gal-latex",
+    "gal-native",
 ]
 
 resolver = "2"
