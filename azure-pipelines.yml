@@ -40,25 +40,17 @@ jobs:
   - script: |
       sudo dpkg --add-architecture arm64
       sudo tee /etc/apt/sources.list.d/arm-cross-compile-sources.list > /dev/null <<EOT
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy universe
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates universe
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy multiverse
-      deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates multiverse
+      deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse
+      deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse
       deb [arch=arm64] http://ports.ubuntu.com/ jammy-backports main restricted universe multiverse
       EOT
       sudo tee /etc/apt/sources.list > /dev/null <<EOT
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy main restricted
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy-updates main restricted
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy universe
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy-updates universe
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy multiverse
-      deb [arch=amd64] http://ports.ubuntu.com/ jammy-updates multiverse
+      deb [arch=amd64] http://ports.ubuntu.com/ jammy main restricted universe multiverse
+      deb [arch=amd64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse
       deb [arch=amd64] http://ports.ubuntu.com/ jammy-backports main restricted universe multiverse
       EOT
       sudo apt update
-      sudo apt install gcc:arm64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
+      sudo apt install gcc-aarch64-linux-gnu:amd64 binutils-aarch64-linux-gnu:amd64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
     condition: eq(variables.platform, 'linux-arm64')
     displayName: "Install dependencies on Linux"
 
