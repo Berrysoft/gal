@@ -39,12 +39,15 @@ jobs:
 
   - script: |
       sudo dpkg --add-architecture arm64
+      sudo sed -i "s/deb-src/deb-src [arch=amd64]" /etc/apt/sources.list
+      sudo sed -i "s/deb/deb [arch=amd64]" /etc/apt/sources.list
+      sudo sed -i "s/deb-src/deb-src [arch=amd64]" /etc/apt/sources.list.d/*
+      sudo sed -i "s/deb/deb [arch=amd64]" /etc/apt/sources.list.d/*
       sudo tee /etc/apt/sources.list.d/arm-cross-compile-sources.list > /dev/null <<EOT
       deb [arch=arm64] http://ports.ubuntu.com/ jammy main restricted universe multiverse
       deb [arch=arm64] http://ports.ubuntu.com/ jammy-updates main restricted universe multiverse
       deb [arch=arm64] http://ports.ubuntu.com/ jammy-backports main restricted universe multiverse
       EOT
-      sudo sed -i "s/deb/deb [arch=amd64]" /etc/apt/sources.list
       sudo apt update
       sudo apt install gcc-aarch64-linux-gnu:amd64 binutils-aarch64-linux-gnu:amd64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
     condition: eq(variables.platform, 'linux-arm64')
