@@ -40,14 +40,14 @@ jobs:
   - script: |
       sudo dpkg --add-architecture arm64
       sudo tee -a /etc/apt/sources.list.d/arm-cross-compile-sources.list > /dev/null <<EOT
-deb [arch=arm64] http://ports.ubuntu.com/ focal main restricted
-deb [arch=arm64] http://ports.ubuntu.com/ focal-updates main restricted
-deb [arch=arm64] http://ports.ubuntu.com/ focal universe
-deb [arch=arm64] http://ports.ubuntu.com/ focal-updates universe
-deb [arch=arm64] http://ports.ubuntu.com/ focal multiverse
-deb [arch=arm64] http://ports.ubuntu.com/ focal-updates multiverse
-deb [arch=arm64] http://ports.ubuntu.com/ focal-backports main restricted universe multiverse
-EOT
+      deb [arch=arm64] http://ports.ubuntu.com/ focal main restricted
+      deb [arch=arm64] http://ports.ubuntu.com/ focal-updates main restricted
+      deb [arch=arm64] http://ports.ubuntu.com/ focal universe
+      deb [arch=arm64] http://ports.ubuntu.com/ focal-updates universe
+      deb [arch=arm64] http://ports.ubuntu.com/ focal multiverse
+      deb [arch=arm64] http://ports.ubuntu.com/ focal-updates multiverse
+      deb [arch=arm64] http://ports.ubuntu.com/ focal-backports main restricted universe multiverse
+      EOT
       sudo apt update
       sudo apt install gcc:arm64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
     condition: eq(variables.platform, 'linux-arm64')
