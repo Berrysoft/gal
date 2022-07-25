@@ -39,6 +39,7 @@ jobs:
 
   - script: |
       sudo dpkg --add-architecture arm64
+      sudo rm /etc/apt/sources.list.d/microsoft-prod.list
       sudo sed -i "s/deb-src/deb-src [arch=amd64]/" /etc/apt/sources.list
       sudo sed -i "s/deb/deb [arch=amd64]/" /etc/apt/sources.list
       sudo sed -i "s/deb-src/deb-src [arch=amd64]/" /etc/apt/sources.list.d/*
