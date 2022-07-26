@@ -50,7 +50,7 @@ jobs:
       deb [arch=arm64] http://ports.ubuntu.com/ jammy-backports main restricted universe multiverse
       EOT
       sudo apt update
-      sudo apt install g++-multilib:amd64 gcc-aarch64-linux-gnu:amd64 binutils-aarch64-linux-gnu:amd64 libicu-dev:amd64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
+      sudo apt install libc6-dev-i386:amd64 libc6-dev-arm64-cross:amd64 gcc-aarch64-linux-gnu:amd64 binutils-aarch64-linux-gnu:amd64 libicu-dev:amd64 libwebkit2gtk-4.0-dev:arm64 libicu-dev:arm64
     condition: eq(variables.platform, 'linux-arm64')
     displayName: "Install dependencies on Linux"
 
