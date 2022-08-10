@@ -54,16 +54,19 @@ bitflags::bitflags! {
     pub struct PluginType: u32 {
         /// The default value.
         /// All plugins are script plugins.
-        const SCRIPT = 0b000;
+        const SCRIPT = 0b0000;
         /// The action plugin.
         /// This plugin processes the action after they are parsed.
-        const ACTION = 0b001;
+        const ACTION = 0b0001;
         /// The text plugin.
         /// The custom text commands are dealt with this type of plugin.
-        const TEXT   = 0b010;
+        const TEXT   = 0b0010;
         /// The game plugin.
         /// This plugin processes the game properties after it is loaded.
-        const GAME   = 0b100;
+        const GAME   = 0b0100;
+        /// The HTML plugin.
+        /// This plugin provides some HTML based GUI extensions.
+        const HTML   = 0b1000;
     }
 }
 

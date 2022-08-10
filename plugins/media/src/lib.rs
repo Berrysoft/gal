@@ -4,7 +4,7 @@ use gal_bindings::*;
 
 #[export]
 fn plugin_type() -> PluginType {
-    PluginType::ACTION | PluginType::TEXT | PluginType::GAME
+    PluginType::ACTION | PluginType::TEXT | PluginType::GAME | PluginType::HTML
 }
 
 #[export]
