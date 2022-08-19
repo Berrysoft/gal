@@ -1,3 +1,5 @@
+//! The script interpreter.
+
 use crate::{plugin::Runtime, *};
 use gal_fallback::Fallback;
 use gal_script::*;
@@ -255,10 +257,11 @@ impl Callable for Text {
         for line in &self.0 {
             match line {
                 Line::Str(s) => str.push_str(s),
-                Line::Cmd(c) => match c {
-                    Command::Exec(p) => str.push_str(&p.call(ctx).get_str()),
-                    _ => {}
-                },
+                Line::Cmd(c) => {
+                    if let Command::Exec(p) = c {
+                        str.push_str(&p.call(ctx).get_str())
+                    }
+                }
             }
         }
         RawValue::Str(str.trim().to_string())
@@ -268,14 +271,14 @@ impl Callable for Text {
 #[cfg(test)]
 mod test {
     use crate::{plugin::Runtime, script::*};
-    use std::sync::Mutex;
+    use std::sync::{LazyLock, Mutex};
 
-    lazy_static::lazy_static! {
-        static ref RUNTIME: Mutex<Runtime> = Mutex::new(tokio_test::block_on(async {
+    static RUNTIME: LazyLock<Mutex<Runtime>> = LazyLock::new(|| {
+        Mutex::new(tokio_test::block_on(async {
             let runtime = Runtime::load("../../examples/plugins", env!("CARGO_MANIFEST_DIR"), &[]);
             runtime.await.unwrap()
-        }));
-    }
+        }))
+    });
 
     fn with_ctx(f: impl FnOnce(&mut VarTable)) {
         let runtime = RUNTIME.lock().unwrap();

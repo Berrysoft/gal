@@ -1,8 +1,9 @@
 //! The script and text parsers.
 
 #![warn(missing_docs)]
-#![feature(char_indices_offset)]
+#![deny(unsafe_code)]
 #![feature(iterator_try_collect)]
+#![feature(once_cell)]
 
 mod exec;
 mod text;

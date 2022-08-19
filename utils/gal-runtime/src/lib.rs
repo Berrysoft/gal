@@ -5,17 +5,17 @@
 //! It can be treated as the "backend" of the game engine.
 
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 #![feature(absolute_path)]
 #![feature(async_closure)]
+#![feature(once_cell)]
 #![feature(round_char_boundary)]
 #![feature(trait_alias)]
 
 mod config;
 mod context;
-/// The plugin utilities.
 pub mod plugin;
 mod progress_future;
-/// The script interpreter.
 pub mod script;
 mod settings;
 

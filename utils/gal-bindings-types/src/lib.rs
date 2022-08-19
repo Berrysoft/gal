@@ -1,6 +1,7 @@
 //! The types used in both runtime and plugins.
 
 #![warn(missing_docs)]
+#![deny(unsafe_code)]
 
 use gal_fallback::{FallbackSpec, IsEmpty2};
 use gal_script::{Program, RawValue};
@@ -109,7 +110,7 @@ impl ActionLine {
     /// Gets a reference of [`str`].
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Chars(s) | Self::Block(s) => &s,
+            Self::Chars(s) | Self::Block(s) => s,
         }
     }
 
@@ -171,26 +172,22 @@ impl ActionLines {
     /// If the back element is also [`ActionLine::Chars`], the string is appended.
     pub fn push_back_chars<'a>(&mut self, s: impl Into<Cow<'a, str>>) {
         let s = s.into();
-        if let Some(act) = self.back_mut() {
-            if let ActionLine::Chars(text) = act {
-                text.push_str(&s);
-                return;
-            }
+        if let Some(ActionLine::Chars(text)) = self.back_mut() {
+            text.push_str(&s);
+        } else {
+            self.push_back(ActionLine::chars(s));
         }
-        self.push_back(ActionLine::chars(s))
     }
 
     /// Push the string as [`ActionLine::Block`] to the back.
     /// If the back element is also [`ActionLine::Block`], the string is appended.
     pub fn push_back_block<'a>(&mut self, s: impl Into<Cow<'a, str>>) {
         let s = s.into();
-        if let Some(act) = self.back_mut() {
-            if let ActionLine::Block(text) = act {
-                text.push_str(&s);
-                return;
-            }
+        if let Some(ActionLine::Block(text)) = self.back_mut() {
+            text.push_str(&s);
+        } else {
+            self.push_back(ActionLine::block(s));
         }
-        self.push_back(ActionLine::block(s))
     }
 }
 

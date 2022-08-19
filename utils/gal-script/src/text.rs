@@ -2,11 +2,9 @@
 
 use crate::exec::*;
 use regex::Regex;
-use std::{error::Error, fmt::Display, iter::Peekable, str::CharIndices};
+use std::{error::Error, fmt::Display, iter::Peekable, str::CharIndices, sync::LazyLock};
 
-lazy_static::lazy_static! {
-    static ref SPACE_REGEX: Regex = Regex::new(r"(\s+)").unwrap();
-}
+static SPACE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\s+)").unwrap());
 
 /// The location of a token.
 /// The `Loc(start, end)` means the location `[start, end)`.
@@ -228,63 +226,36 @@ pub enum Command {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Text(pub Vec<Line>);
 
-struct PeekableChars<'a> {
-    iter: CharIndices<'a>,
-    head: Option<Option<(usize, char)>>,
-}
-
-impl<'a> PeekableChars<'a> {
-    pub fn new(s: &'a str) -> Self {
-        Self {
-            iter: s.char_indices(),
-            head: None,
-        }
-    }
-
-    pub fn peek(&mut self) -> Option<char> {
-        self.head
-            .get_or_insert_with(|| self.iter.next())
-            .map(|(_, c)| c)
-    }
-
-    pub fn readed(&self) -> usize {
-        match self.head {
-            Some(Some((offset, _))) => offset,
-            _ => self.iter.offset(),
-        }
-    }
-}
-
-impl<'a> Iterator for PeekableChars<'a> {
-    type Item = char;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.head.take() {
-            Some(item) => item,
-            None => self.iter.next(),
-        }
-        .map(|(_, c)| c)
-    }
-}
-
 const fn is_special_char(c: char) -> bool {
-    match c {
-        '\\' | '{' | '}' | '/' => true,
-        _ => false,
-    }
+    matches!(c, '\\' | '{' | '}' | '/')
 }
 
 struct TextLexer<'a> {
     text: &'a str,
-    chars: PeekableChars<'a>,
+    chars: Peekable<CharIndices<'a>>,
 }
 
 impl<'a> TextLexer<'a> {
     pub fn new(text: &'a str) -> Self {
         Self {
             text,
-            chars: PeekableChars::new(text),
+            chars: text.char_indices().peekable(),
         }
+    }
+
+    fn peek_char(&mut self) -> Option<char> {
+        self.chars.peek().map(|(_, c)| *c)
+    }
+
+    fn next_char(&mut self) -> Option<char> {
+        self.chars.next().map(|(_, c)| c)
+    }
+
+    fn offset(&mut self) -> usize {
+        self.chars
+            .peek()
+            .map(|(offset, _)| *offset)
+            .unwrap_or_else(|| self.text.len())
     }
 }
 
@@ -292,45 +263,42 @@ impl<'a> Iterator for TextLexer<'a> {
     type Item = Token<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let cur = self.chars.readed();
+        let cur = self.offset();
         let mut has_whitespace = false;
-        while let Some(c) = self.chars.peek() {
+        while let Some(c) = self.peek_char() {
             if c.is_whitespace() {
-                self.chars.next();
+                self.next_char();
                 has_whitespace = true;
             } else {
                 break;
             }
         }
         if has_whitespace {
-            return Some(Token::space(Loc(cur, self.chars.readed())));
+            return Some(Token::space(Loc(cur, self.offset())));
         }
-        let cur = self.chars.readed();
-        while let Some(c) = self.chars.peek() {
+        let cur = self.offset();
+        while let Some(c) = self.peek_char() {
             if is_special_char(c) {
-                if self.chars.readed() - cur > 0 {
+                if self.offset() - cur > 0 {
                     break;
                 } else {
-                    self.chars.next();
-                    return Some(Token::spec_char(
-                        Loc(self.chars.readed() - 1, self.chars.readed()),
-                        c,
-                    ));
+                    self.next_char();
+                    return Some(Token::spec_char(Loc(self.offset() - 1, self.offset()), c));
                 }
             } else if c.is_whitespace() {
-                if self.chars.readed() - cur > 0 {
+                if self.offset() - cur > 0 {
                     break;
                 } else {
                     return self.next();
                 }
             } else {
-                self.chars.next();
+                self.next_char();
             }
         }
-        if self.chars.readed() - cur > 0 {
+        if self.offset() - cur > 0 {
             Some(Token::text(
-                Loc(cur, self.chars.readed()),
-                &self.text[cur..self.chars.readed()],
+                Loc(cur, self.offset()),
+                &self.text[cur..self.offset()],
             ))
         } else {
             None
@@ -530,18 +498,11 @@ impl<'a> TextParser<'a> {
                             break;
                         }
                     }
-                    RichTokenType::Command(_, _) => {
+                    RichTokenType::Command(name, params) => {
                         if str.is_empty() {
-                            let (loc, name, params) = if let Some(Ok(RichToken {
-                                loc,
-                                tok: RichTokenType::Command(name, params),
-                            })) = self.lexer.next()
-                            {
-                                (loc, name.to_string(), params)
-                            } else {
-                                unreachable!()
-                            };
-                            return Ok(Some(self.parse_command(loc, name, params)?));
+                            let res = Self::parse_command(tok.loc, name, params)?;
+                            self.lexer.next();
+                            return Ok(Some(res));
                         } else {
                             break;
                         }
@@ -561,7 +522,7 @@ impl<'a> TextParser<'a> {
         }
     }
 
-    fn concat_params(&self, toks: &[RichToken]) -> ParseResult<String> {
+    fn concat_params(toks: &[RichToken]) -> ParseResult<String> {
         let mut str = String::new();
         for tok in toks {
             match &tok.tok {
@@ -574,8 +535,8 @@ impl<'a> TextParser<'a> {
         Ok(str)
     }
 
-    fn parse_program(&self, toks: &[RichToken]) -> ParseResult<Program> {
-        let program = self.concat_params(toks)?;
+    fn parse_program(toks: &[RichToken]) -> ParseResult<Program> {
+        let program = Self::concat_params(toks)?;
         match ProgramParser::new().parse(&program) {
             Ok(p) => Ok(p),
             Err(e) => {
@@ -600,57 +561,56 @@ impl<'a> TextParser<'a> {
     }
 
     fn check_params_count(
-        &self,
         count: usize,
         min: usize,
         max: usize,
         loc: Loc,
-        name: String,
+        name: &str,
     ) -> ParseResult<()> {
         if count < min || count > max {
-            parse_error(loc, ParseErrorType::InvalidParamsCount(name, count))
+            parse_error(
+                loc,
+                ParseErrorType::InvalidParamsCount(name.to_string(), count),
+            )
         } else {
             Ok(())
         }
     }
 
-    fn parse_command(
-        &self,
-        loc: Loc,
-        name: String,
-        params: Vec<Vec<RichToken>>,
-    ) -> ParseResult<Line> {
+    fn parse_command(loc: Loc, name: &str, params: &[Vec<RichToken>]) -> ParseResult<Line> {
         let params_count = params.len();
-        let cmd = match name.as_str() {
+        let cmd = match name {
             "res" => {
-                self.check_params_count(params_count, 1, 1, loc, name)?;
+                Self::check_params_count(params_count, 1, 1, loc, name)?;
                 // Construct a simple program to get the resource.
                 // We don't expose this command to the front end.
-                Command::Exec(Program(vec![Expr::Ref(Ref::Res(
-                    self.concat_params(&params[0])?,
-                ))]))
+                Command::Exec(Program(vec![Expr::Ref(Ref::Res(Self::concat_params(
+                    &params[0],
+                )?))]))
             }
             "ch" => {
-                self.check_params_count(params_count, 1, 2, loc, name)?;
+                Self::check_params_count(params_count, 1, 2, loc, name)?;
                 Command::Character(
-                    self.concat_params(&params[0])?,
-                    self.concat_params(params.get(1).map(|slice| slice.as_slice()).unwrap_or(&[]))?,
+                    Self::concat_params(&params[0])?,
+                    Self::concat_params(
+                        params.get(1).map(|slice| slice.as_slice()).unwrap_or(&[]),
+                    )?,
                 )
             }
             "exec" => {
-                self.check_params_count(params_count, 1, 1, loc, name)?;
-                Command::Exec(self.parse_program(&params[0])?)
+                Self::check_params_count(params_count, 1, 1, loc, name)?;
+                Command::Exec(Self::parse_program(&params[0])?)
             }
             "switch" => {
-                self.check_params_count(params_count, 1, 3, loc, name)?;
+                Self::check_params_count(params_count, 1, 3, loc, name)?;
                 let enabled = match params.get(2) {
-                    Some(toks) => Some(self.parse_program(toks)?),
+                    Some(toks) => Some(Self::parse_program(toks)?),
                     None => None,
                 };
                 Command::Switch {
-                    text: self.concat_params(&params[0])?,
+                    text: Self::concat_params(&params[0])?,
                     action: if let Some(toks) = params.get(1) {
-                        self.parse_program(toks)?
+                        Self::parse_program(toks)?
                     } else {
                         Program::default()
                     },
@@ -660,7 +620,7 @@ impl<'a> TextParser<'a> {
             name => {
                 let mut args = vec![];
                 for p in params.iter() {
-                    args.push(self.concat_params(p)?);
+                    args.push(Self::concat_params(p)?);
                 }
                 Command::Other(name.to_string(), args)
             }
