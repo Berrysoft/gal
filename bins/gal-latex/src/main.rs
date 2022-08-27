@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     if let Some(loc) = opts.locale {
         ctx.set_locale(loc);
     }
-    while let Some(action) = ctx.next_run() {
+    while let Some(action) = ctx.next_run().await {
         if let Some(name) = &action.character {
             output
                 .write_all(format!("\\paragraph{{{}}}", name).as_bytes())

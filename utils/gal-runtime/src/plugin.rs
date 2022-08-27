@@ -4,7 +4,7 @@
 #![allow(clippy::mut_from_ref)]
 
 use crate::*;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use gal_bindings_types::*;
 use log::warn;
 use serde::{de::DeserializeOwned, Serialize};
@@ -69,42 +69,54 @@ impl Host {
     /// Calls a method by name.
     ///
     /// The args and returns are passed by MessagePack with [`rmp_serde`].
-    pub fn call<Params: Serialize, Res: DeserializeOwned>(
+    pub async fn call<Params: Serialize, Res: DeserializeOwned>(
         &self,
         name: &str,
         args: Params,
     ) -> Result<Res> {
         let memory = self.instance.exports.get_memory("memory")?;
-        let func = self
-            .instance
-            .exports
-            .get_native_function::<(i32, i32), u64>(name)?;
         let data = rmp_serde::to_vec(&args)?;
         let ptr = self.abi_alloc.call(8, data.len() as i32)?;
         unsafe { mem_slice_mut(memory, ptr, data.len() as i32) }.copy_from_slice(&data);
-        let res = func.call(data.len() as i32, ptr)?;
+        let res = if let Ok(func) = self.instance.exports.get_native_function(name) {
+            self.call_impl(memory, func, ptr, data.len() as i32)?
+        } else if let Ok(func) = self
+            .instance
+            .exports
+            .get_native_function(&format!("{}_async", name))
+        {
+            self.call_async_impl(memory, func, ptr, data.len() as i32)
+                .await?
+        } else {
+            bail!("Cannot find exported function {}", name);
+        };
+        self.abi_free.call(ptr, data.len() as i32, 8)?;
+        Ok(res)
+    }
+
+    fn call_impl<Res: DeserializeOwned>(
+        &self,
+        memory: &Memory,
+        func: NativeFunc<(i32, i32), u64>,
+        ptr: i32,
+        len: i32,
+    ) -> Result<Res> {
+        let res = func.call(len, ptr)?;
         let (len, res) = ((res >> 32) as i32, (res & 0xFFFFFFFF) as i32);
         let res_data = unsafe { mem_slice(memory, res, len) };
         let res_data = rmp_serde::from_slice(res_data)?;
         self.export_free.call(len, res)?;
-        self.abi_free.call(ptr, data.len() as i32, 8)?;
         Ok(res_data)
     }
 
-    pub async fn call_async<Params: Serialize, Res: DeserializeOwned>(
+    async fn call_async_impl<Res: DeserializeOwned>(
         &self,
-        name: &str,
-        args: Params,
+        memory: &Memory,
+        func: NativeFunc<(i32, i32), u64>,
+        ptr: i32,
+        len: i32,
     ) -> Result<Res> {
-        let memory = self.instance.exports.get_memory("memory")?;
-        let func = self
-            .instance
-            .exports
-            .get_native_function::<(i32, i32), u64>(name)?;
-        let data = rmp_serde::to_vec(&args)?;
-        let ptr = self.abi_alloc.call(8, data.len() as i32)?;
-        unsafe { mem_slice_mut(memory, ptr, data.len() as i32) }.copy_from_slice(&data);
-        let fut = func.call(data.len() as i32, ptr)?;
+        let fut = func.call(len, ptr)?;
         let wasm_addr = self.abi_alloc.call(8, 8)?;
         let wasm_ptr = unsafe { memory.data_ptr().add(wasm_addr as usize) } as *mut usize;
         let wasm_fut = WasmFuture {
@@ -120,43 +132,42 @@ impl Host {
         self.export_free.call(len, res)?;
         self.export_async_free.call(fut)?;
         self.abi_free.call(wasm_addr, 8, 8)?;
-        self.abi_free.call(ptr, data.len() as i32, 8)?;
         Ok(res_data)
     }
 
     /// Calls a script plugin method by name.
-    pub fn dispatch_method(&self, name: &str, args: &[RawValue]) -> Result<RawValue> {
-        self.call(name, (args,))
+    pub async fn dispatch_method(&self, name: &str, args: &[RawValue]) -> Result<RawValue> {
+        self.call(name, (args,)).await
     }
 
     /// Gets the [`PluginType`].
-    pub fn plugin_type(&self) -> Result<PluginType> {
-        self.call("plugin_type", ())
+    pub async fn plugin_type(&self) -> Result<PluginType> {
+        self.call("plugin_type", ()).await
     }
 
     /// Processes [`Action`] in action plugin.
-    pub fn process_action(&self, ctx: ActionProcessContextRef) -> Result<Action> {
-        self.call("process_action", (ctx,))
+    pub async fn process_action(&self, ctx: ActionProcessContextRef<'_>) -> Result<Action> {
+        self.call("process_action", (ctx,)).await
     }
 
     /// Gets registered TeX commands of a text plugin.
-    pub fn text_commands(&self) -> Result<Vec<String>> {
-        self.call("text_commands", ())
+    pub async fn text_commands(&self) -> Result<Vec<String>> {
+        self.call("text_commands", ()).await
     }
 
     /// Calls a custom command in the text plugin.
-    pub fn dispatch_command(
+    pub async fn dispatch_command(
         &self,
         name: &str,
         args: &[String],
-        ctx: TextProcessContextRef,
+        ctx: TextProcessContextRef<'_>,
     ) -> Result<TextProcessResult> {
-        self.call(name, (args, ctx))
+        self.call(name, (args, ctx)).await
     }
 
     /// Processes [`Game`] when opening the config file.
-    pub fn process_game(&self, ctx: GameProcessContextRef) -> Result<GameProcessResult> {
-        self.call("process_game", (ctx,))
+    pub async fn process_game(&self, ctx: GameProcessContextRef<'_>) -> Result<GameProcessResult> {
+        self.call("process_game", (ctx,)).await
     }
 }
 
@@ -293,12 +304,12 @@ impl Runtime {
             let buf = tokio::fs::read(&p).await?;
             let module = Module::from_binary(&store, &buf)?;
             let runtime = Host::new(&module, &import_object)?;
-            let plugin_type = runtime.plugin_type()?;
+            let plugin_type = runtime.plugin_type().await?;
             if plugin_type.contains(PluginType::ACTION) {
                 action_modules.push(name.clone());
             }
             if plugin_type.contains(PluginType::TEXT) {
-                let cmds = runtime.text_commands()?;
+                let cmds = runtime.text_commands().await?;
                 for cmd in cmds.into_iter() {
                     let res = text_modules.insert(cmd.clone(), name.clone());
                     if let Some(old_module) = res {

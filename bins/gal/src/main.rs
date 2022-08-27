@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     if let Some(loc) = opts.locale {
         ctx.set_locale(loc);
     }
-    while let Some(action) = ctx.next_run() {
+    while let Some(action) = ctx.next_run().await {
         if let Some(name) = &action.character {
             print!("_{}_", name);
         }
@@ -85,7 +85,7 @@ async fn main() -> Result<()> {
                     let valid =
                         i > 0 && i <= action.switch_actions.len() && action.switches[i - 1].enabled;
                     if valid {
-                        ctx.call(&action.switch_actions[i - 1]);
+                        ctx.call(&action.switch_actions[i - 1]).await;
                         break;
                     }
                 }
