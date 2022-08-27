@@ -8,7 +8,13 @@ use anyhow::Result;
 use gal_bindings_types::*;
 use log::warn;
 use serde::{de::DeserializeOwned, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    future::Future,
+    path::Path,
+    pin::Pin,
+    task::{Context, Poll, Waker},
+};
 use tokio_stream::{wrappers::ReadDirStream, StreamExt};
 use wasmer::*;
 use wasmer_wasi::*;
@@ -18,6 +24,8 @@ pub struct Host {
     abi_free: NativeFunc<(i32, i32, i32), ()>,
     abi_alloc: NativeFunc<(i32, i32), i32>,
     export_free: NativeFunc<(i32, i32), ()>,
+    export_async_poll: NativeFunc<(u64, i32), u64>,
+    export_async_free: NativeFunc<u64, ()>,
     instance: Instance,
 }
 
@@ -42,10 +50,18 @@ impl Host {
         let abi_free = instance.exports.get_native_function("__abi_free")?;
         let abi_alloc = instance.exports.get_native_function("__abi_alloc")?;
         let export_free = instance.exports.get_native_function("__export_free")?;
+        let export_async_poll = instance
+            .exports
+            .get_native_function("__export_async_poll")?;
+        let export_async_free = instance
+            .exports
+            .get_native_function("__export_async_free")?;
         Ok(Self {
             abi_free,
             abi_alloc,
             export_free,
+            export_async_poll,
+            export_async_free,
             instance,
         })
     }
@@ -71,6 +87,39 @@ impl Host {
         let res_data = unsafe { mem_slice(memory, res, len) };
         let res_data = rmp_serde::from_slice(res_data)?;
         self.export_free.call(len, res)?;
+        self.abi_free.call(ptr, data.len() as i32, 8)?;
+        Ok(res_data)
+    }
+
+    pub async fn call_async<Params: Serialize, Res: DeserializeOwned>(
+        &self,
+        name: &str,
+        args: Params,
+    ) -> Result<Res> {
+        let memory = self.instance.exports.get_memory("memory")?;
+        let func = self
+            .instance
+            .exports
+            .get_native_function::<(i32, i32), u64>(name)?;
+        let data = rmp_serde::to_vec(&args)?;
+        let ptr = self.abi_alloc.call(8, data.len() as i32)?;
+        unsafe { mem_slice_mut(memory, ptr, data.len() as i32) }.copy_from_slice(&data);
+        let fut = func.call(data.len() as i32, ptr)?;
+        let wasm_addr = self.abi_alloc.call(8, 8)?;
+        let wasm_ptr = unsafe { memory.data_ptr().add(wasm_addr as usize) } as *mut usize;
+        let wasm_fut = WasmFuture {
+            fut,
+            wasm_addr,
+            wasm_ptr,
+            export_async_poll: self.export_async_poll.clone(),
+        };
+        let res = wasm_fut.await;
+        let (len, res) = ((res >> 32) as i32, (res & 0xFFFFFFFF) as i32);
+        let res_data = unsafe { mem_slice(memory, res, len) };
+        let res_data = rmp_serde::from_slice(res_data)?;
+        self.export_free.call(len, res)?;
+        self.export_async_free.call(fut)?;
+        self.abi_free.call(wasm_addr, 8, 8)?;
         self.abi_free.call(ptr, data.len() as i32, 8)?;
         Ok(res_data)
     }
@@ -167,10 +216,25 @@ impl Runtime {
             },
         );
         let log_flush_func = Function::new_native(store, || log::logger().flush());
+
+        let async_wake_func = Function::new_native_with_env(
+            store,
+            RuntimeInstanceData::default(),
+            |env_data: &RuntimeInstanceData, waker: i32| {
+                let memory = unsafe { env_data.memory.get_unchecked() };
+                let ptr = unsafe { memory.data_ptr().add(waker as usize) } as *mut usize;
+                let waker = unsafe { *ptr } as *mut Waker;
+                unsafe { waker.as_ref() }.expect("__wake").wake_by_ref();
+            },
+        );
+
         let import_object = imports! {
             "log" => {
                 "__log" => log_func,
                 "__log_flush" => log_flush_func,
+            },
+            "async" => {
+                "__wake" => async_wake_func,
             }
         };
         let wasi_env = WasiState::new("gal-runtime").preopen_dir("/")?.finalize()?;
@@ -256,5 +320,30 @@ impl Runtime {
             text_modules,
             game_modules,
         })
+    }
+}
+
+struct WasmFuture {
+    pub fut: u64,
+    pub wasm_addr: i32,
+    pub wasm_ptr: *mut usize,
+    pub export_async_poll: NativeFunc<(u64, i32), u64>,
+}
+
+impl Future for WasmFuture {
+    type Output = u64;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let waker = cx.waker();
+        let waker_addr = std::ptr::addr_of!(*waker);
+        unsafe { self.wasm_ptr.write_unaligned(waker_addr as usize) };
+        match self
+            .export_async_poll
+            .call(self.fut, self.wasm_addr)
+            .expect("__poll")
+        {
+            std::u64::MAX => Poll::Pending,
+            v => Poll::Ready(v),
+        }
     }
 }
