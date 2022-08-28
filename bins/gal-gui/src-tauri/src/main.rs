@@ -254,7 +254,10 @@ async fn start_record(
 #[command]
 async fn next_run(storage: State<'_, Storage>) -> CommandResult<bool> {
     let mut context = storage.context.lock().await;
-    let action = context.as_mut().and_then(|context| context.next_run());
+    let action = match context.as_mut() {
+        Some(context) => context.next_run().await,
+        None => None,
+    };
     if let Some(action) = action {
         info!("Next action: {:?}", action);
         *storage.action.lock().await = Some(action);
@@ -312,7 +315,7 @@ async fn switch(i: usize, storage: State<'_, Storage>) -> CommandResult<RawValue
         .as_ref()
         .and_then(|action| action.switch_actions.get(i))
         .ok_or_else(|| anyhow!("Index error: {}", i))?;
-    Ok(context.call(action))
+    Ok(context.call(action).await)
 }
 
 #[command]

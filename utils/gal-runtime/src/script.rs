@@ -1,6 +1,7 @@
 //! The script interpreter.
 
 use crate::{plugin::Runtime, *};
+use async_trait::async_trait;
 use fallback::Fallback;
 use gal_script::*;
 use log::{error, warn};
@@ -29,52 +30,57 @@ impl<'a> VarTable<'a> {
     }
 
     /// Calls a [`Callable`] object.
-    pub fn call(&mut self, c: &impl Callable) -> RawValue {
-        c.call(self)
+    pub async fn call(&mut self, c: &impl Callable) -> RawValue {
+        c.call(self).await
     }
 }
 
 /// Represents a callable part of a script.
+#[async_trait]
 pub trait Callable {
     /// Calls the part with the [`VarTable`].
-    fn call(&self, ctx: &mut VarTable) -> RawValue;
+    async fn call(&self, ctx: &mut VarTable) -> RawValue;
 }
 
-impl<T: Callable> Callable for &T {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
-        (*self).call(ctx)
+#[async_trait]
+impl<T: Callable + Sync> Callable for &T {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
+        (*self).call(ctx).await
     }
 }
 
-impl<T: Callable> Callable for Option<T> {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
+#[async_trait]
+impl<T: Callable + Sync> Callable for Option<T> {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
-            Some(c) => c.call(ctx),
+            Some(c) => c.call(ctx).await,
             None => RawValue::Unit,
         }
     }
 }
 
+#[async_trait]
 impl Callable for Program {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
         ctx.vars.clear();
         let mut res = RawValue::Unit;
         for expr in &self.0 {
-            res = expr.call(ctx);
+            res = expr.call(ctx).await;
         }
         res
     }
 }
 
+#[async_trait]
 impl Callable for Expr {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
-            Self::Ref(r) => r.call(ctx),
+            Self::Ref(r) => r.call(ctx).await,
             Self::Const(c) => c.clone(),
             Self::Unary(op, e) => match op {
-                UnaryOp::Positive => RawValue::Num(e.call(ctx).get_num()),
-                UnaryOp::Negative => RawValue::Num(-e.call(ctx).get_num()),
-                UnaryOp::Not => match e.call(ctx) {
+                UnaryOp::Positive => RawValue::Num(e.call(ctx).await.get_num()),
+                UnaryOp::Negative => RawValue::Num(-e.call(ctx).await.get_num()),
+                UnaryOp::Not => match e.call(ctx).await {
                     RawValue::Unit => RawValue::Unit,
                     RawValue::Bool(b) => RawValue::Bool(!b),
                     RawValue::Num(i) => RawValue::Num(!i),
@@ -82,25 +88,25 @@ impl Callable for Expr {
                 },
             },
             Self::Binary(lhs, op, rhs) => match op {
-                BinaryOp::Val(op) => bin_val(ctx, lhs, op, rhs),
-                BinaryOp::Logic(op) => bin_logic(ctx, lhs, op, rhs),
+                BinaryOp::Val(op) => bin_val(ctx, lhs, op, rhs).await,
+                BinaryOp::Logic(op) => bin_logic(ctx, lhs, op, rhs).await,
                 BinaryOp::Assign => {
-                    let val = rhs.call(ctx);
+                    let val = rhs.call(ctx).await;
                     assign(ctx, lhs, val)
                 }
                 BinaryOp::Inplace(op) => {
-                    let val = bin_val(ctx, lhs, op, rhs);
+                    let val = bin_val(ctx, lhs, op, rhs).await;
                     assign(ctx, lhs, val)
                 }
             },
-            Self::Call(ns, name, args) => call(ctx, ns, name, args),
+            Self::Call(ns, name, args) => call(ctx, ns, name, args).await,
         }
     }
 }
 
-fn bin_val(ctx: &mut VarTable, lhs: &Expr, op: &ValBinaryOp, rhs: &Expr) -> RawValue {
-    let lhs = lhs.call(ctx);
-    let rhs = rhs.call(ctx);
+async fn bin_val(ctx: &mut VarTable<'_>, lhs: &Expr, op: &ValBinaryOp, rhs: &Expr) -> RawValue {
+    let lhs = lhs.call(ctx).await;
+    let rhs = rhs.call(ctx).await;
     let t = lhs.get_type().max(rhs.get_type());
     match t {
         ValueType::Unit => RawValue::Unit,
@@ -156,13 +162,13 @@ fn bin_str_val(lhs: RawValue, op: &ValBinaryOp, rhs: RawValue) -> RawValue {
     }
 }
 
-fn bin_logic(ctx: &mut VarTable, lhs: &Expr, op: &LogicBinaryOp, rhs: &Expr) -> RawValue {
+async fn bin_logic(ctx: &mut VarTable<'_>, lhs: &Expr, op: &LogicBinaryOp, rhs: &Expr) -> RawValue {
     let res = match op {
-        LogicBinaryOp::And => lhs.call(ctx).get_bool() && rhs.call(ctx).get_bool(),
-        LogicBinaryOp::Or => lhs.call(ctx).get_bool() || rhs.call(ctx).get_bool(),
+        LogicBinaryOp::And => lhs.call(ctx).await.get_bool() && rhs.call(ctx).await.get_bool(),
+        LogicBinaryOp::Or => lhs.call(ctx).await.get_bool() || rhs.call(ctx).await.get_bool(),
         op => {
-            let lhs = lhs.call(ctx);
-            let rhs = rhs.call(ctx);
+            let lhs = lhs.call(ctx).await;
+            let rhs = rhs.call(ctx).await;
             let t = lhs.get_type().max(rhs.get_type());
             match t {
                 ValueType::Unit => false,
@@ -199,21 +205,30 @@ fn assign(ctx: &mut VarTable, e: &Expr, val: RawValue) -> RawValue {
     RawValue::Unit
 }
 
-fn call(ctx: &mut VarTable, ns: &str, name: &str, args: &[Expr]) -> RawValue {
+async fn call(ctx: &mut VarTable<'_>, ns: &str, name: &str, args: &[Expr]) -> RawValue {
     if ns.is_empty() {
         match name {
-            "if" => if args.get(0).call(ctx).get_bool() {
-                args.get(1)
-            } else {
-                args.get(2)
+            "if" => {
+                if args.get(0).call(ctx).await.get_bool() {
+                    args.get(1)
+                } else {
+                    args.get(2)
+                }
+                .call(ctx)
+                .await
             }
-            .call(ctx),
             _ => unimplemented!("intrinstics"),
         }
     } else {
-        let args = args.iter().map(|e| e.call(ctx)).collect::<Vec<_>>();
+        let args = {
+            let mut res = vec![];
+            for e in args {
+                res.push(e.call(ctx).await);
+            }
+            res
+        };
         if let Some(runtime) = ctx.runtime.modules.get(ns) {
-            match runtime.dispatch_method(name, &args) {
+            match runtime.dispatch_method(name, &args).await {
                 Ok(res) => res,
                 Err(e) => {
                     error!("Calling `{}.{}` error: {}", ns, name, e);
@@ -227,8 +242,9 @@ fn call(ctx: &mut VarTable, ns: &str, name: &str, args: &[Expr]) -> RawValue {
     }
 }
 
+#[async_trait]
 impl Callable for Ref {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
             Self::Var(n) => ctx.vars.get(n).cloned().unwrap_or_else(|| {
                 warn!("Cannot find variable `{}`.", n);
@@ -251,15 +267,16 @@ impl Callable for Ref {
     }
 }
 
+#[async_trait]
 impl Callable for Text {
-    fn call(&self, ctx: &mut VarTable) -> RawValue {
+    async fn call(&self, ctx: &mut VarTable) -> RawValue {
         let mut str = String::new();
         for line in &self.0 {
             match line {
                 Line::Str(s) => str.push_str(s),
                 Line::Cmd(c) => {
                     if let Command::Exec(p) = c {
-                        str.push_str(&p.call(ctx).get_str())
+                        str.push_str(&p.call(ctx).await.get_str())
                     }
                 }
             }
@@ -275,8 +292,8 @@ mod test {
 
     static RUNTIME: OnceCell<Runtime> = OnceCell::const_new();
 
-    async fn with_ctx(f: impl FnOnce(&mut VarTable)) {
-        let runtime = RUNTIME
+    async fn get_runtime() -> &'static Runtime {
+        RUNTIME
             .get_or_init(|| async {
                 let runtime = Runtime::load(
                     "../../examples/plugins",
@@ -285,105 +302,104 @@ mod test {
                 );
                 runtime.await.unwrap()
             })
-            .await;
-        let mut locals = VarMap::default();
-        let mut ctx = VarTable::new(runtime, Fallback::new(None, None), &mut locals);
-        f(&mut ctx);
+            .await
     }
 
     #[tokio::test]
     async fn vars() {
-        with_ctx(|ctx| {
-            assert_eq!(
-                ProgramParser::new()
-                    .parse(
-                        "
+        let mut locals = VarMap::default();
+        let mut ctx = VarTable::new(get_runtime().await, Fallback::new(None, None), &mut locals);
+        assert_eq!(
+            ProgramParser::new()
+                .parse(
+                    "
                             a = 0;
                             a += 1;
                             a += a;
                             a
                         "
-                    )
-                    .ok()
-                    .call(ctx),
-                RawValue::Num(2)
-            );
+                )
+                .ok()
+                .call(&mut ctx)
+                .await,
+            RawValue::Num(2)
+        );
 
-            assert_eq!(
-                ProgramParser::new().parse("a").ok().call(ctx),
-                RawValue::Unit
-            );
+        assert_eq!(
+            ProgramParser::new().parse("a").ok().call(&mut ctx).await,
+            RawValue::Unit
+        );
 
-            assert_eq!(
-                ProgramParser::new()
-                    .parse(
-                        "
+        assert_eq!(
+            ProgramParser::new()
+                .parse(
+                    "
                             $a = 0;
                             $a += 1;
                             $a += a;
                             $a
                         "
-                    )
-                    .ok()
-                    .call(ctx),
-                RawValue::Num(1)
-            );
+                )
+                .ok()
+                .call(&mut ctx)
+                .await,
+            RawValue::Num(1)
+        );
 
-            assert_eq!(
-                ProgramParser::new().parse("$a").ok().call(ctx),
-                RawValue::Num(1)
-            );
-        })
-        .await;
+        assert_eq!(
+            ProgramParser::new().parse("$a").ok().call(&mut ctx).await,
+            RawValue::Num(1)
+        );
     }
 
     #[tokio::test]
     async fn if_test() {
-        with_ctx(|ctx| {
-            assert_eq!(
-                ProgramParser::new()
-                    .parse(
-                        r##"
+        let mut locals = VarMap::default();
+        let mut ctx = VarTable::new(get_runtime().await, Fallback::new(None, None), &mut locals);
+        assert_eq!(
+            ProgramParser::new()
+                .parse(
+                    r##"
                             if(1 + 1 + 4 + 5 + 1 + 4 == 16, "sodayo", ~)
                         "##
-                    )
-                    .ok()
-                    .call(ctx)
-                    .get_num(),
-                6
-            );
-            assert_eq!(
-                ProgramParser::new()
-                    .parse(
-                        r##"
+                )
+                .ok()
+                .call(&mut ctx)
+                .await
+                .get_num(),
+            6
+        );
+        assert_eq!(
+            ProgramParser::new()
+                .parse(
+                    r##"
                             if(true, "sodayo")
                         "##
-                    )
-                    .ok()
-                    .call(ctx)
-                    .get_str(),
-                "sodayo"
-            );
-        })
-        .await;
+                )
+                .ok()
+                .call(&mut ctx)
+                .await
+                .get_str(),
+            "sodayo"
+        );
     }
 
     #[tokio::test]
     async fn format() {
-        with_ctx(|ctx| {
-            assert_eq!(
-                ProgramParser::new()
-                    .parse(
-                        r##"
+        let mut locals = VarMap::default();
+        let mut ctx = VarTable::new(get_runtime().await, Fallback::new(None, None), &mut locals);
+        assert_eq!(
+            ProgramParser::new()
+                .parse(
+                    r##"
                             format.fmt("Hello {}!", 114514)
                         "##
-                    )
-                    .ok()
-                    .call(ctx)
-                    .get_str(),
-                "Hello 114514!"
-            )
-        })
-        .await;
+                )
+                .ok()
+                .call(&mut ctx)
+                .await
+                .get_str(),
+            "Hello 114514!"
+        )
     }
 }

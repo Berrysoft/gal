@@ -5,6 +5,7 @@ use crate::{
     *,
 };
 use anyhow::{anyhow, bail, Result};
+use async_recursion::async_recursion;
 use gal_bindings_types::{
     ActionLines, ActionProcessContextRef, GameProcessContextRef, TextProcessContextRef,
 };
@@ -86,7 +87,7 @@ impl Context {
                 root_path: &root_path,
                 props: &game.props,
             };
-            let res = module.process_game(ctx)?;
+            let res = module.process_game(ctx).await?;
             for (key, value) in res.props {
                 game.props.insert(key, value);
             }
@@ -188,8 +189,8 @@ impl Context {
     }
 
     /// Call the part of script with this context.
-    pub fn call(&mut self, expr: &impl Callable) -> RawValue {
-        self.table().call(expr)
+    pub async fn call(&mut self, expr: &impl Callable) -> RawValue {
+        self.table().call(expr).await
     }
 
     fn rich_error(&self, text: &str, e: &ParseError) -> String {
@@ -222,7 +223,7 @@ impl Context {
         )
     }
 
-    fn exact_text(&mut self, para_title: Option<String>, t: Text) -> Result<Action> {
+    async fn exact_text(&mut self, para_title: Option<String>, t: Text) -> Result<Action> {
         let mut action_line = ActionLines::default();
         let mut chkey = None;
         let mut chname = None;
@@ -246,14 +247,16 @@ impl Context {
                             Some(alter)
                         }
                     }
-                    Command::Exec(p) => action_line.push_back_chars(self.call(&p).into_str()),
+                    Command::Exec(p) => action_line.push_back_chars(self.call(&p).await.into_str()),
                     Command::Switch {
                         text,
                         action,
                         enabled,
                     } => {
-                        // unwrap: when enabled is None, it means true.
-                        let enabled = enabled.map(|p| self.call(&p).get_bool()).unwrap_or(true);
+                        let enabled = match enabled {
+                            Some(p) => self.call(&p).await.get_bool(),
+                            None => true,
+                        };
                         switches.push(Switch { text, enabled });
                         switch_actions.push(action);
                     }
@@ -264,11 +267,13 @@ impl Context {
                                 game_props: &self.game.props,
                                 frontend: self.frontend,
                             };
-                            let mut res = self.runtime.modules.get(m).unwrap().dispatch_command(
-                                &name,
-                                &args,
-                                game_context,
-                            )?;
+                            let mut res = self
+                                .runtime
+                                .modules
+                                .get(m)
+                                .unwrap()
+                                .dispatch_command(&name, &args, game_context)
+                                .await?;
                             action_line.append(&mut res.line);
                             for (key, value) in res.props.into_iter() {
                                 props.insert(key, value);
@@ -339,7 +344,7 @@ impl Context {
         }
     }
 
-    fn process_action(&mut self, mut action: Action) -> Result<Action> {
+    async fn process_action(&mut self, mut action: Action) -> Result<Action> {
         let last_action = self.record.history.last();
         for action_module in &self.runtime.action_modules {
             let module = &self.runtime.modules[action_module];
@@ -350,7 +355,7 @@ impl Context {
                 last_action,
                 action: &action,
             };
-            action = module.process_action(ctx)?;
+            action = module.process_action(ctx).await?;
         }
         while let Some(act) = action.line.back() {
             if act.as_str().trim().is_empty() {
@@ -392,7 +397,8 @@ impl Context {
     }
 
     /// Step to next line.
-    pub fn next_run(&mut self) -> Option<Action> {
+    #[async_recursion]
+    pub async fn next_run(&mut self) -> Option<Action> {
         if let Some(action) = self.record.history.last() {
             self.global_record
                 .record
@@ -406,28 +412,44 @@ impl Context {
             if cur_text.is_some() {
                 let text = cur_text.map(|act| self.parse_text_rich_error(act));
                 let para_title = cur_para.and_then(|p| p.title.as_ref()).cloned();
-                let actions = text.map(|t| {
-                    self.exact_text(para_title.clone(), t).unwrap_or_else(|e| {
-                        error!("Exact text error: {}", e);
-                        Action::default()
+                let actions = {
+                    let (text, base_text) = text.unzip();
+                    let text = match text {
+                        Some(t) => Some(self.exact_text(para_title.clone(), t).await),
+                        None => None,
+                    };
+                    let base_text = match base_text {
+                        Some(t) => Some(self.exact_text(para_title.clone(), t).await),
+                        None => None,
+                    };
+                    let text = Fallback::new(text, base_text);
+                    text.map(|t| {
+                        t.unwrap_or_else(|e| {
+                            error!("Exact text error: {}", e);
+                            Action::default()
+                        })
                     })
-                });
-                let res = self.merge_action(actions).map(|act| {
-                    self.process_action(act).unwrap_or_else(|e| {
+                };
+                let res = match self.merge_action(actions) {
+                    Some(act) => Some(self.process_action(act).await.unwrap_or_else(|e| {
                         error!("Error when processing action: {}", e);
                         Action::default()
-                    })
-                });
+                    })),
+                    None => None,
+                };
                 self.ctx.cur_act += 1;
                 res
             } else {
-                self.ctx.cur_para = cur_para
+                self.ctx.cur_para = match cur_para
                     .and_then(|p| p.next.as_ref())
                     .map(|next| self.parse_text_rich_error(next))
-                    .map(|text| self.call(&text).into_str())
-                    .unwrap_or_default();
+                {
+                    Some(text) => Some(self.call(&text).await.into_str()),
+                    None => None,
+                }
+                .unwrap_or_default();
                 self.ctx.cur_act = 0;
-                self.next_run()
+                self.next_run().await
             }
         } else {
             None
