@@ -7,6 +7,7 @@ members = [
     "markdown",
     "media",
     "random",
+    "timer",
 ]
 
 [profile.release]
