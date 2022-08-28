@@ -36,21 +36,21 @@ impl<'a> VarTable<'a> {
 }
 
 /// Represents a callable part of a script.
-#[async_trait(?Send)]
+#[async_trait]
 pub trait Callable {
     /// Calls the part with the [`VarTable`].
     async fn call(&self, ctx: &mut VarTable) -> RawValue;
 }
 
-#[async_trait(?Send)]
-impl<T: Callable> Callable for &T {
+#[async_trait]
+impl<T: Callable + Sync> Callable for &T {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         (*self).call(ctx).await
     }
 }
 
-#[async_trait(?Send)]
-impl<T: Callable> Callable for Option<T> {
+#[async_trait]
+impl<T: Callable + Sync> Callable for Option<T> {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
             Some(c) => c.call(ctx).await,
@@ -59,7 +59,7 @@ impl<T: Callable> Callable for Option<T> {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Callable for Program {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         ctx.vars.clear();
@@ -71,7 +71,7 @@ impl Callable for Program {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Callable for Expr {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
@@ -242,7 +242,7 @@ async fn call(ctx: &mut VarTable<'_>, ns: &str, name: &str, args: &[Expr]) -> Ra
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Callable for Ref {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         match self {
@@ -267,7 +267,7 @@ impl Callable for Ref {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Callable for Text {
     async fn call(&self, ctx: &mut VarTable) -> RawValue {
         let mut str = String::new();

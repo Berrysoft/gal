@@ -88,7 +88,7 @@ impl Host {
             self.call_async_impl(memory, func, ptr, data.len() as i32)
                 .await?
         } else {
-            bail!("Cannot find exported function {}", name);
+            bail!("Cannot find function {}", name);
         };
         self.abi_free.call(ptr, data.len() as i32, 8)?;
         Ok(res)
@@ -118,7 +118,7 @@ impl Host {
     ) -> Result<Res> {
         let fut = func.call(len, ptr)?;
         let wasm_addr = self.abi_alloc.call(8, 8)?;
-        let wasm_ptr = unsafe { memory.data_ptr().add(wasm_addr as usize) } as *mut usize;
+        let wasm_ptr = unsafe { memory.data_ptr().add(wasm_addr as usize) } as usize;
         let wasm_fut = WasmFuture {
             fut,
             wasm_addr,
@@ -337,7 +337,7 @@ impl Runtime {
 struct WasmFuture {
     pub fut: u64,
     pub wasm_addr: i32,
-    pub wasm_ptr: *mut usize,
+    pub wasm_ptr: usize,
     pub export_async_poll: NativeFunc<(u64, i32), u64>,
 }
 
@@ -347,7 +347,7 @@ impl Future for WasmFuture {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let waker = cx.waker();
         let waker_addr = std::ptr::addr_of!(*waker);
-        unsafe { self.wasm_ptr.write_unaligned(waker_addr as usize) };
+        unsafe { (self.wasm_ptr as *mut usize).write_unaligned(waker_addr as usize) };
         match self
             .export_async_poll
             .call(self.fut, self.wasm_addr)

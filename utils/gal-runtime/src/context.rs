@@ -397,7 +397,7 @@ impl Context {
     }
 
     /// Step to next line.
-    #[async_recursion(?Send)]
+    #[async_recursion]
     pub async fn next_run(&mut self) -> Option<Action> {
         if let Some(action) = self.record.history.last() {
             self.global_record
