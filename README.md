@@ -1,3 +1,6 @@
+# Archive note
+This repo is archived. The project is still developed as [Ayaka](https://github.com/Uni-Gal/Ayaka).
+
 # GAL
 ![Logo](assets/glogo.png)
 
